@@ -142,6 +142,8 @@ class _ModelOptions:
     max_response_output_tokens: int | Literal["inf"]
     api_key: str
     base_url: str
+    azure_endpoint: str
+    api_version: str
 
 
 class _ContentPtr(TypedDict):
@@ -175,6 +177,8 @@ class RealtimeModel:
         max_response_output_tokens: int | Literal["inf"] = "inf",
         api_key: str | None = None,
         base_url: str | None = None,
+        azure_endpoint: str | None = None,
+        api_version: str | None = None,
         http_session: aiohttp.ClientSession | None = None,
         loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
@@ -187,7 +191,12 @@ class RealtimeModel:
                 "OpenAI API key is required, either using the argument or by setting the OPENAI_API_KEY environmental variable"
             )
 
-        if not base_url:
+        if not azure_endpoint:
+            azure_endpoint = os.getenv("AZURE_OPENAI_ENDPOINT")
+        if azure_endpoint and not api_version:
+            api_version = os.getenv("OPENAI_API_VERSION")
+
+        if not azure_endpoint and not base_url:
             base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
 
         self._default_opts = _ModelOptions(
@@ -204,6 +213,8 @@ class RealtimeModel:
             max_response_output_tokens=max_response_output_tokens,
             api_key=api_key,
             base_url=base_url,
+            azure_endpoint=azure_endpoint,
+            api_version=api_version
         )
 
         self._loop = loop or asyncio.get_event_loop()
@@ -256,6 +267,8 @@ class RealtimeModel:
             or self._default_opts.max_response_output_tokens,
             api_key=self._default_opts.api_key,
             base_url=self._default_opts.base_url,
+            azure_endpoint=self._default_opts.azure_endpoint,
+            api_version=self._default_opts.api_version
         )
 
         new_session = RealtimeSession(
@@ -530,6 +543,8 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
             or self._opts.max_response_output_tokens,
             api_key=self._opts.api_key,
             base_url=self._opts.base_url,
+            azure_endpoint=self._opts.azure_endpoint,
+            api_version=self._opts.api_version
         )
 
         tools = []
@@ -577,13 +592,18 @@ class RealtimeSession(utils.EventEmitter[EventTypes]):
     @utils.log_exceptions(logger=logger)
     async def _main_task(self) -> None:
         try:
-            params = {"model": self._opts.model}
-            base_url = self._opts.base_url.rstrip("/")
-            url = urljoin(base_url + "/", "realtime") + f"?{urlencode(params)}"
-            headers = {
-                "Authorization": "Bearer " + self._opts.api_key,
-                "OpenAI-Beta": "realtime=v1",
-            }
+            if self._opts.azure_endpoint:
+                params = {"deployment": self._opts.model, "api-version": self._opts.api_version}
+                url = urljoin(self._opts.azure_endpoint + "/", "openai/realtime") + f"?{urlencode(params)}"
+                headers = {"api-key": self._opts.api_key}
+            else:
+                params = {"model": self._opts.model}
+                base_url = self._opts.base_url.rstrip("/")
+                url = urljoin(base_url + "/", "realtime") + f"?{urlencode(params)}"
+                headers = {
+                    "Authorization": "Bearer " + self._opts.api_key,
+                    "OpenAI-Beta": "realtime=v1",
+                }
 
             ws_conn = await self._http_session.ws_connect(
                 url,
